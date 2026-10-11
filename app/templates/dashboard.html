@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aegis-Copilot | Enterprise Operations & RBAC Governance</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-white">
+
+  <!-- TOP APP HEADER -->
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-lg shadow-inner">
+          🛡️
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight text-white">AEGIS-COPILOT</h1>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300 mono">v1.1.0-ENTERPRISE</span>
+            <span id="jwtTokenBadge" class="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 mono">JWT: Initializing...</span>
+          </div>
+          <p class="text-xs text-slate-400">Zero-Leakage RBAC &bull; RouterPlus Claude LLM &bull; Pipeline Circuit Breakers &bull; Chained Audit Ledger</p>
+        </div>
+      </div>
+
+      <!-- ACTIVE USER / ROLE SELECTOR -->
+      <div class="flex items-center gap-4 bg-slate-950/70 border border-slate-800 rounded-xl px-4 py-2">
+        <div class="text-xs text-slate-400">
+          <span class="block text-[10px] uppercase font-semibold text-slate-500 tracking-wider">Active Role (RBAC)</span>
+          <div class="flex items-center gap-2 mt-0.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span id="activeUserLabel" class="font-medium text-slate-200">user.intern@enterprise.internal</span>
+          </div>
+        </div>
+
+        <div class="h-8 w-px bg-slate-800"></div>
+
+        <div class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-800 text-xs font-medium">
+          <button type="button" onclick="setRole('INTERN')" id="btnRoleINTERN" class="px-3 py-1 rounded-md transition-all bg-emerald-600 text-white font-semibold shadow">
+            INTERN (Tier 1)
+          </button>
+          <button type="button" onclick="setRole('ANALYST')" id="btnRoleANALYST" class="px-3 py-1 rounded-md transition-all text-slate-400 hover:text-white">
+            ANALYST (Tier 2)
+          </button>
+          <button type="button" onclick="setRole('EXECUTIVE')" id="btnRoleEXECUTIVE" class="px-3 py-1 rounded-md transition-all text-slate-400 hover:text-white">
+            EXECUTIVE (Tier 3)
+          </button>
+        </div>
+      </div>
+
+      <!-- BREAKER TELEMETRY BADGE -->
+      <div class="flex items-center gap-3">
+        <div id="breakerPill" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-semibold mono">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>PIPELINE: CLOSED (HEALTHY)</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN DASHBOARD CONTENT -->
+  <main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- TOP METRICS CARDS -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">RLS Clearance Level</div>
+        <div id="clearanceTierLabel" class="text-xl font-bold text-white mt-1">Tier 1: Public + Internal</div>
+        <div class="text-xs text-slate-500 mt-1">Restricted/Executive chunks pruned at DB layer</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">Circuit Breaker Failures</div>
+        <div id="metricFailures" class="text-xl font-bold text-emerald-400 mt-1">0 / 3 Breaches</div>
+        <div class="text-xs text-slate-500 mt-1">Max Null Rate Tolerance: 15.0%</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">DLQ Quarantined Batches</div>
+        <div id="metricQuarantined" class="text-xl font-bold text-rose-400 mt-1">0 Batches</div>
+        <div class="text-xs text-slate-500 mt-1">Poisoned payloads isolated with sidecars</div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">Ledger Cryptographic Integrity</div>
+        <div id="metricIntegrity" class="text-xl font-bold text-emerald-400 mt-1">UNBROKEN (SHA-256)</div>
+        <div class="text-xs text-slate-500 mt-1">Chained hashes verify zero ledger tampering</div>
+      </div>
+    </div>
+
+    <!-- 2-COLUMN MAIN INTERFACES -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <!-- LEFT COLUMN: GROUNDED REASONING & RBAC PLAYGROUND -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col space-y-4 shadow-sm">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <span>🔍</span> Grounded Operations Copilot (RLS Pre-Filtered)
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">Pre-filtered context synthesized via Claude-3.5-Sonnet (RouterPlus).</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 mono">
+              claude-sonnet-5-5
+            </span>
+            <span id="activeClearanceBadge" class="text-xs px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 mono font-semibold">
+              CLEARANCE: INTERN
+            </span>
+          </div>
+        </div>
+
+        <!-- PRE-CANNED SCENARIOS -->
+        <div class="space-y-1.5">
+          <div class="text-[11px] font-semibold uppercase text-slate-400 tracking-wider">Quick Enterprise Scenarios:</div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button onclick="setQuery('What is the Q3 executive payroll and bonus breakdown for VP of Engineering?')" class="text-left text-xs bg-slate-950 border border-slate-800 hover:border-slate-600 rounded-lg p-2 transition text-slate-300">
+              <span class="block font-semibold text-rose-400">🔒 Executive Payroll</span>
+              <span class="text-[10px] text-slate-500">Tier 3 (VP compensation)</span>
+            </button>
+            <button onclick="setQuery('Summarize Q3 cloud gross margins and vendor spend for Cloudflare and Datadog.')" class="text-left text-xs bg-slate-950 border border-slate-800 hover:border-slate-600 rounded-lg p-2 transition text-slate-300">
+              <span class="block font-semibold text-amber-400">📊 Q3 Vendor Spend</span>
+              <span class="text-[10px] text-slate-500">Tier 2 (Cloud gross margin)</span>
+            </button>
+            <button onclick="setQuery('What are the Project Titan Kubernetes deployment specifications and ingress SLA?')" class="text-left text-xs bg-slate-950 border border-slate-800 hover:border-slate-600 rounded-lg p-2 transition text-slate-300">
+              <span class="block font-semibold text-emerald-400">⚙️ Titan Ingress SLA</span>
+              <span class="text-[10px] text-slate-500">Tier 1 (Internal specs)</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- QUERY INPUT FORM -->
+        <form id="queryForm" onsubmit="handleQuerySubmit(event)" class="space-y-3">
+          <div>
+            <textarea id="queryInput" rows="3" required placeholder="Ask operations copilot a question..." class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs text-white focus:outline-none focus:border-emerald-500 font-sans"></textarea>
+          </div>
+          <div class="flex items-center justify-between">
+            <div class="text-[11px] text-slate-500 flex items-center gap-1.5">
+              <span>⚡ JWT Bearer Verified</span>
+              <span>&bull;</span>
+              <span>Zero LLM token leakage</span>
+            </div>
+            <button type="submit" id="btnSubmitQuery" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-2">
+              <span>Execute RLS Query</span>
+              <span>&rarr;</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- RESPONSE DISPLAY BOX -->
+        <div id="queryResponseCard" class="hidden bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-3">
+          <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+            <div class="flex items-center gap-2">
+              <span id="rlsStatusBadge" class="text-[10px] uppercase font-bold px-2 py-0.5 rounded mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">ENFORCED_CLEAN</span>
+              <span id="queryLatency" class="text-xs text-slate-500 mono">Latency: 1.2ms</span>
+            </div>
+            <div id="queryTelemetry" class="text-xs text-slate-400 mono">Accessible: 2 | Redacted: 1</div>
+          </div>
+
+          <div id="answerContent" class="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap font-sans"></div>
+
+          <!-- CITATIONS CONTAINER -->
+          <div id="citationsContainer" class="space-y-2 pt-2 border-t border-slate-800/60">
+            <div class="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Cryptographic Citations:</div>
+            <div id="citationsList" class="space-y-1.5"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: CIRCUIT BREAKER & DEAD-LETTER QUEUE -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col space-y-4 shadow-sm">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <span>⚡</span> Data Quality Circuit Breaker & DLQ
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">Statistical null threshold & domain anomaly inspection prevents database poisoning.</p>
+          </div>
+          <button onclick="resetBreaker()" class="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md border border-slate-700 transition">
+            Admin Reset Breaker
+          </button>
+        </div>
+
+        <!-- MULTIPART CSV FILE UPLOAD WIDGET -->
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-300">Live CSV File Upload & Inspection</span>
+            <span class="text-[10px] text-slate-500 mono">POST /api/pipeline/upload</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="file" id="csvFileInput" accept=".csv" class="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-emerald-400 hover:file:bg-slate-700 w-full cursor-pointer">
+            <button onclick="uploadCsvFile()" id="btnUploadCsv" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-xs font-bold transition whitespace-nowrap">
+              Upload & Inspect
+            </button>
+          </div>
+        </div>
+
+        <!-- BREAKER DEMO TRIGGER BUTTONS -->
+        <div class="grid grid-cols-2 gap-3">
+          <button onclick="injectCorruptPayload()" class="bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded-lg p-3 text-left transition group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-rose-400">⚠️ Inject Corrupt Payload</span>
+              <span class="text-xs text-rose-500 group-hover:translate-x-0.5 transition">&rarr;</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Sends malformed payroll CSV with 54% nulls & negative salaries. Trips circuit breaker to OPEN.</p>
+          </button>
+
+          <button onclick="injectCleanPayload()" class="bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-800/60 rounded-lg p-3 text-left transition group">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-emerald-400">✓ Ingest Clean Batch</span>
+              <span class="text-xs text-emerald-500 group-hover:translate-x-0.5 transition">&rarr;</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Submits valid procurement batch with 0% nulls. Promotes verified batch to Gold Storage & DuckDB.</p>
+          </button>
+        </div>
+
+        <!-- LIVE INSPECTION RESULT CARD -->
+        <div id="ingestResultCard" class="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Latest Inspection Report</span>
+            <span id="ingestStatusBadge" class="text-xs px-2 py-0.5 rounded mono font-bold bg-slate-800 text-slate-300">AWAITING BATCH</span>
+          </div>
+          <div id="ingestDetails" class="text-xs text-slate-300 leading-relaxed">
+            Upload a CSV file or click a demo trigger above to observe statistical validation and quarantine routing.
+          </div>
+        </div>
+
+        <!-- IDEMPOTENT ACTION DISPATCHER SECTION -->
+        <div class="pt-2 border-t border-slate-800 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <span>🔄</span> Idempotent Action Dispatcher (ERP / Webhook)
+              </h3>
+              <p class="text-[11px] text-slate-500">Guarantees exactly-once execution via unique Idempotency-Key & verified Bearer JWT.</p>
+            </div>
+            <button onclick="generateNewKey()" class="text-[10px] text-emerald-400 hover:text-emerald-300 mono underline">
+              Generate New Key
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div>
+              <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Action Type</label>
+              <select id="actionTypeSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                <option value="APPROVE_PO">APPROVE_PO ($45,000 Cloudflare)</option>
+                <option value="ADJUST_BUDGET">ADJUST_BUDGET (Engineering Capex)</option>
+                <option value="FREEZE_VENDOR">FREEZE_VENDOR (Security Alert)</option>
+              </select>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Idempotency Key (UUID / Nonce)</label>
+              <input type="text" id="idempotencyKeyInput" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white mono" value="idem_key_001_8a7f23c9">
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between gap-2">
+            <button onclick="dispatchAction(false)" class="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition">
+              Dispatch Action (1st Time)
+            </button>
+            <button onclick="dispatchAction(true)" class="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-bold transition">
+              Simulate Duplicate Retry (Same Key)
+            </button>
+          </div>
+
+          <div id="actionResultBox" class="hidden bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs mono"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM FULL-WIDTH: IMMUTABLE AUDIT LEDGER -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>📜</span> Tamper-Evident Immutable Audit Ledger
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">Append-only SQLite ledger with cryptographic hash chaining (SHA-256 Merkle-link).</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <button onclick="verifyLedgerIntegrity()" class="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/50 text-emerald-400 text-xs font-bold rounded-lg transition flex items-center gap-1.5">
+            <span>🔐 Verify Cryptographic Chain</span>
+          </button>
+          <button onclick="loadAuditLogs()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg transition">
+            Refresh Logs
+          </button>
+        </div>
+      </div>
+
+      <!-- INTEGRITY ALERT BANNER -->
+      <div id="integrityBanner" class="hidden rounded-lg p-3 text-xs mono font-semibold flex items-center justify-between"></div>
+
+      <!-- AUDIT TABLE -->
+      <div class="overflow-x-auto border border-slate-800 rounded-lg">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+            <tr>
+              <th class="p-3">Timestamp (UTC)</th>
+              <th class="p-3">User &bull; Role</th>
+              <th class="p-3">Event Type</th>
+              <th class="p-3">Status</th>
+              <th class="p-3">Operation / Query</th>
+              <th class="p-3">Chained Signature Hash</th>
+            </tr>
+          </thead>
+          <tbody id="auditTableBody" class="divide-y divide-slate-800/60 font-mono text-slate-300">
+            <tr>
+              <td colspan="6" class="p-4 text-center text-slate-500 font-sans">Loading audit ledger entries...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- JAVASCRIPT LOGIC -->
+  <script>
+    let activeRole = 'INTERN';
+    let activeUserId = 'user.intern@enterprise.internal';
+    let currentJwtToken = '';
+
+    // Automatically acquire signed JWT token for the active role
+    async function acquireToken(role, userId) {
+      try {
+        const res = await fetch('/api/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, role: role })
+        });
+        const data = await res.json();
+        currentJwtToken = data.access_token;
+        const badge = document.getElementById('jwtTokenBadge');
+        badge.innerText = `JWT: ${currentJwtToken.substring(0, 16)}... (HS256 Verified)`;
+        badge.title = `Full JWT Bearer Token: ${currentJwtToken}`;
+      } catch (err) {
+        console.error('Failed to issue JWT:', err);
+      }
+    }
+
+    async function setRole(role) {
+      activeRole = role;
+      const roles = ['INTERN', 'ANALYST', 'EXECUTIVE'];
+      roles.forEach(r => {
+        const btn = document.getElementById('btnRole' + r);
+        if (r === role) {
+          btn.className = 'px-3 py-1 rounded-md transition-all bg-emerald-600 text-white font-semibold shadow';
+        } else {
+          btn.className = 'px-3 py-1 rounded-md transition-all text-slate-400 hover:text-white';
+        }
+      });
+
+      if (role === 'INTERN') {
+        activeUserId = 'user.intern@enterprise.internal';
+        document.getElementById('clearanceTierLabel').innerText = 'Tier 1: Public + Internal';
+      } else if (role === 'ANALYST') {
+        activeUserId = 'sarah.analyst@enterprise.internal';
+        document.getElementById('clearanceTierLabel').innerText = 'Tier 2: Public + Internal + Restricted';
+      } else {
+        activeUserId = 'marcus.exec@enterprise.internal';
+        document.getElementById('clearanceTierLabel').innerText = 'Tier 3: Full Executive Clearance';
+      }
+
+      document.getElementById('activeUserLabel').innerText = activeUserId;
+      document.getElementById('activeClearanceBadge').innerText = 'CLEARANCE: ' + role;
+
+      await acquireToken(activeRole, activeUserId);
+      loadAuditLogs();
+    }
+
+    function setQuery(text) {
+      document.getElementById('queryInput').value = text;
+      document.getElementById('queryInput').focus();
+    }
+
+    function generateNewKey() {
+      const rand = Math.random().toString(36).substring(2, 10);
+      document.getElementById('idempotencyKeyInput').value = `idem_key_${Date.now()}_${rand}`;
+    }
+
+    // Refresh Circuit Breaker Status
+    async function refreshBreakerStatus() {
+      try {
+        const res = await fetch('/api/circuit-breaker/status');
+        const data = await res.json();
+        const pill = document.getElementById('breakerPill');
+        const metricFails = document.getElementById('metricFailures');
+        const metricDLQ = document.getElementById('metricQuarantined');
+
+        metricFails.innerText = `${data.failure_count} / ${data.failure_threshold} Breaches`;
+        metricDLQ.innerText = `${data.total_quarantined_batches} Batches`;
+
+        if (data.state === 'CLOSED') {
+          pill.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-semibold mono';
+          pill.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>PIPELINE: CLOSED (HEALTHY)</span>`;
+        } else if (data.state === 'OPEN') {
+          pill.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-rose-500/50 bg-rose-500/20 text-rose-400 text-xs font-semibold mono animate-pulse';
+          pill.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-500"></span><span>PIPELINE: OPEN (HALTED &bull; DLQ)</span>`;
+        } else {
+          pill.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-400 text-xs font-semibold mono';
+          pill.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span><span>PIPELINE: HALF_OPEN (PROBING)</span>`;
+        }
+      } catch (err) {
+        console.error('Failed to fetch breaker status:', err);
+      }
+    }
+
+    // Handle Grounded Query Submission (Bearer Token Authenticated)
+    async function handleQuerySubmit(e) {
+      e.preventDefault();
+      const query = document.getElementById('queryInput').value.trim();
+      if (!query) return;
+
+      const btn = document.getElementById('btnSubmitQuery');
+      btn.disabled = true;
+      btn.innerText = 'Evaluating RLS & Querying LLM...';
+
+      try {
+        const res = await fetch('/api/query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + currentJwtToken
+          },
+          body: JSON.stringify({
+            query: query
+          })
+        });
+
+        if (res.status === 401) {
+          alert('401 Unauthorized: JWT token missing or expired. Re-selecting role...');
+          await acquireToken(activeRole, activeUserId);
+          return;
+        }
+
+        const data = await res.json();
+        const card = document.getElementById('queryResponseCard');
+        card.classList.remove('hidden');
+
+        const badge = document.getElementById('rlsStatusBadge');
+        if (data.rls_status === 'ENFORCED_CLEAN') {
+          badge.className = 'text-[10px] uppercase font-bold px-2 py-0.5 rounded mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+          badge.innerText = 'RLS: PERMITTED';
+        } else {
+          badge.className = 'text-[10px] uppercase font-bold px-2 py-0.5 rounded mono bg-rose-500/20 text-rose-400 border border-rose-500/30';
+          badge.innerText = 'RLS: DENIED_ZERO_CLEARANCE';
+        }
+
+        document.getElementById('queryLatency').innerText = `Latency: ${data.latency_ms}ms`;
+        document.getElementById('queryTelemetry').innerText = `Accessible: ${data.accessible_chunks_count} | Redacted: ${data.redacted_or_restricted_chunks_count}`;
+        document.getElementById('answerContent').innerText = data.answer;
+
+        // Render Citations
+        const citList = document.getElementById('citationsList');
+        citList.innerHTML = '';
+        if (data.citations && data.citations.length > 0) {
+          data.citations.forEach(c => {
+            const el = document.createElement('div');
+            el.className = 'p-2 bg-slate-900 border border-slate-800 rounded text-[11px] mono space-y-1';
+            el.innerHTML = `
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-slate-200">${c.doc_name}</span>
+                <span class="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 text-[10px]">${c.classification}</span>
+              </div>
+              <div class="text-slate-400 text-[10px] truncate">SHA-256: ${c.doc_hash}</div>
+            `;
+            citList.appendChild(el);
+          });
+        } else {
+          citList.innerHTML = '<div class="text-[11px] text-slate-500 italic">No source documents cited (Access denied or no matches).</div>';
+        }
+
+        loadAuditLogs();
+      } catch (err) {
+        alert('Query failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Execute RLS Query →';
+      }
+    }
+
+    // Multipart CSV File Upload
+    async function uploadCsvFile() {
+      const fileInput = document.getElementById('csvFileInput');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert('Please choose a .csv file to upload.');
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('source_id', 'DASHBOARD_FILE_UPLOAD');
+
+      const btn = document.getElementById('btnUploadCsv');
+      btn.disabled = true;
+      btn.innerText = 'Inspecting...';
+
+      try {
+        const res = await fetch('/api/pipeline/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        renderInspectionResult(data);
+      } catch (err) {
+        alert('Upload failed: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Upload & Inspect';
+        refreshBreakerStatus();
+        loadAuditLogs();
+      }
+    }
+
+    function renderInspectionResult(data) {
+      const badge = document.getElementById('ingestStatusBadge');
+      const details = document.getElementById('ingestDetails');
+
+      if (data.is_valid) {
+        badge.className = 'text-xs px-2 py-0.5 rounded mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40';
+        badge.innerText = 'PASSED (GOLD)';
+        details.innerHTML = `
+          <div class="space-y-1">
+            <div class="text-emerald-400 font-semibold">${data.message}</div>
+            <div class="mono text-[11px] text-slate-400">Null Rate: ${(data.null_rate * 100).toFixed(1)}% | Rows: ${data.row_count} | Registered in DuckDB warehouse.</div>
+          </div>
+        `;
+      } else {
+        badge.className = 'text-xs px-2 py-0.5 rounded mono font-bold bg-rose-500/20 text-rose-400 border border-rose-500/40';
+        badge.innerText = data.status;
+        let vList = data.violations.map(v => `<li class="text-rose-300">${v}</li>`).join('');
+        details.innerHTML = `
+          <div class="space-y-1.5">
+            <div class="text-rose-400 font-semibold">${data.message}</div>
+            <div class="mono text-[11px] text-slate-400">Null Rate: ${(data.null_rate * 100).toFixed(1)}% | Rows: ${data.row_count}</div>
+            <div class="mono text-[11px] text-slate-400">Quarantine ID: <span class="text-amber-400">${data.quarantine_id || 'N/A'}</span></div>
+            <ul class="list-disc list-inside space-y-0.5 text-[11px] pt-1">${vList}</ul>
+          </div>
+        `;
+      }
+    }
+
+    // Inject Corrupt Payload
+    async function injectCorruptPayload() {
+      const corruptCsv = `employee_id,name,department,salary,bonus,effective_date
+EMP-991,John Corrupt,Engineering,-45000,null,2026-10-01
+EMP-992,null,null,null,null,null
+EMP-993,Jane Malformed,,NaN,null,
+EMP-994,,Operations,-12000,null,null
+EMP-995,Alex Bad,Finance,null,null,2026-10-01`;
+
+      const res = await fetch('/api/pipeline/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_id: 'ERP_UPSTREAM_PAYROLL',
+          payload_format: 'csv',
+          raw_content: corruptCsv,
+          metadata: { provider: 'HR_LEGACY_BATCH' }
+        })
+      });
+
+      const data = await res.json();
+      renderInspectionResult(data);
+      refreshBreakerStatus();
+      loadAuditLogs();
+    }
+
+    // Inject Clean Payload
+    async function injectCleanPayload() {
+      const cleanCsv = `vendor_id,vendor_name,category,annual_spend,status
+VND-501,Fastly CDN,Network Infrastructure,180000,ACTIVE
+VND-502,AWS Cloud Services,Compute & Storage,420000,ACTIVE
+VND-503,Grafana Labs,Telemetry Visualization,48000,ACTIVE`;
+
+      const res = await fetch('/api/pipeline/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_id: 'PROCUREMENT_SYSTEM',
+          payload_format: 'csv',
+          raw_content: cleanCsv,
+          metadata: { verified_by: 'FIN_AUDIT' }
+        })
+      });
+
+      const data = await res.json();
+      renderInspectionResult(data);
+      refreshBreakerStatus();
+      loadAuditLogs();
+    }
+
+    // Reset Breaker
+    async function resetBreaker() {
+      const res = await fetch('/api/circuit-breaker/reset', { method: 'POST' });
+      const data = await res.json();
+      alert('Circuit Breaker administratively reset to CLOSED state.');
+      refreshBreakerStatus();
+      loadAuditLogs();
+    }
+
+    // Dispatch Action (Bearer Token Authenticated)
+    async function dispatchAction(isRetry) {
+      const actionType = document.getElementById('actionTypeSelect').value;
+      const key = document.getElementById('idempotencyKeyInput').value.trim();
+      const box = document.getElementById('actionResultBox');
+
+      if (!key) {
+        alert('Please enter an idempotency key.');
+        return;
+      }
+
+      box.classList.remove('hidden');
+      box.innerHTML = '<span class="text-slate-400">Dispatching to ERP event bridge...</span>';
+
+      try {
+        const res = await fetch('/api/actions/dispatch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + currentJwtToken
+          },
+          body: JSON.stringify({
+            action_type: actionType,
+            idempotency_key: key,
+            payload: { amount: 45000, recipient: 'Cloudflare Inc' }
+          })
+        });
+
+        const data = await res.json();
+        let color = data.status === 'EXECUTED' ? 'text-emerald-400' : (data.status === 'DUPLICATE_CACHED' ? 'text-amber-400' : 'text-rose-400');
+
+        box.innerHTML = `
+          <div class="space-y-1 ${color}">
+            <div class="font-bold">STATUS: ${data.status}</div>
+            <div class="text-[11px] text-slate-300">${data.message}</div>
+            <div class="text-[10px] text-slate-500">Action ID: ${data.action_id} | Idempotency Key: ${data.idempotency_key}</div>
+          </div>
+        `;
+        loadAuditLogs();
+      } catch (err) {
+        box.innerHTML = `<span class="text-rose-400">Dispatch Error: ${err.message}</span>`;
+      }
+    }
+
+    // Load Audit Logs
+    async function loadAuditLogs() {
+      try {
+        const res = await fetch('/api/audit/logs?limit=15');
+        const logs = await res.json();
+        const tbody = document.getElementById('auditTableBody');
+
+        if (!logs || logs.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-slate-500 font-sans">No audit records recorded yet.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = logs.map(l => {
+          let badgeColor = l.status === 'SUCCESS' || l.status === 'EXECUTED' ? 'text-emerald-400' :
+                           (l.status === 'DUPLICATE_CACHED' ? 'text-amber-400' : 'text-rose-400');
+          return `
+            <tr class="hover:bg-slate-800/40 transition">
+              <td class="p-3 text-slate-400 text-[11px]">${l.timestamp.substring(11, 19)}</td>
+              <td class="p-3"><span class="text-slate-200">${l.user_id}</span> <span class="text-[10px] text-slate-500">(${l.role})</span></td>
+              <td class="p-3 text-slate-300 font-semibold">${l.event_type}</td>
+              <td class="p-3 ${badgeColor} font-bold">${l.status}</td>
+              <td class="p-3 text-slate-300 max-w-xs truncate" title="${l.action_or_query}">${l.action_or_query}</td>
+              <td class="p-3 text-slate-500 text-[10px] truncate max-w-xs" title="${l.signature_hash}">${l.signature_hash.substring(0, 16)}...</td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed to load audit logs:', err);
+      }
+    }
+
+    // Verify Hash Chain Integrity
+    async function verifyLedgerIntegrity() {
+      try {
+        const res = await fetch('/api/audit/verify');
+        const data = await res.json();
+        const banner = document.getElementById('integrityBanner');
+        banner.classList.remove('hidden');
+
+        if (data.is_valid) {
+          banner.className = 'rounded-lg p-3 text-xs mono font-semibold flex items-center justify-between bg-emerald-950/60 border border-emerald-500/50 text-emerald-300';
+          banner.innerHTML = `
+            <span>✓ CRYPTOGRAPHIC VERIFICATION PASSED: ${data.message}</span>
+            <span class="px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-200">TOTAL BLOCKS: ${data.total_records}</span>
+          `;
+        } else {
+          banner.className = 'rounded-lg p-3 text-xs mono font-semibold flex items-center justify-between bg-rose-950/60 border border-rose-500/50 text-rose-300 animate-pulse';
+          banner.innerHTML = `
+            <span>⚠️ TAMPERING DETECTED: ${data.message}</span>
+            <span class="px-2 py-0.5 rounded bg-rose-900/60 text-rose-200">BROKEN AT: ${data.broken_at_id}</span>
+          `;
+        }
+      } catch (err) {
+        alert('Verification request failed: ' + err.message);
+      }
+    }
+
+    // Initialize on page load
+    window.addEventListener('DOMContentLoaded', async () => {
+      await setRole('INTERN');
+      generateNewKey();
+      refreshBreakerStatus();
+      loadAuditLogs();
+    });
+  </script>
+</body>
+</html>
