@@ -34,7 +34,7 @@ class AuditLedger:
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initializes SQLite table for the immutable ledger."""
+        """Initializes SQLite table for the immutable ledger with strict append-only triggers."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS audit_ledger (
@@ -52,6 +52,20 @@ class AuditLedger:
                     prev_signature_hash TEXT NOT NULL,
                     detail TEXT
                 );
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS prevent_audit_update
+                BEFORE UPDATE ON audit_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'Audit ledger is strictly append-only: UPDATE prohibited');
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
+                BEFORE DELETE ON audit_ledger
+                BEGIN
+                    SELECT RAISE(ABORT, 'Audit ledger is strictly append-only: DELETE prohibited');
+                END;
             """)
             conn.commit()
 
@@ -76,18 +90,19 @@ class AuditLedger:
         ip_address: str = "127.0.0.1",
         detail: Optional[str] = None,
     ) -> AuditLogRecord:
-        """Appends a new event and seals it with a cryptographic signature hash."""
+        """Appends a new event and seals it with a cryptographic signature hash over ALL fields."""
         audit_id = f"aud_{uuid.uuid4().hex[:16]}"
         timestamp = datetime.now(timezone.utc).isoformat()
         cited_hashes_list = cited_doc_hashes or []
         cited_hashes_json = json.dumps(cited_hashes_list)
+        detail_str = detail or ""
 
         prev_hash = self._get_last_signature_hash()
 
-        # Compute tamper-evident chained hash
+        # Compute tamper-evident chained hash across ALL row fields
         hash_payload = (
             f"{prev_hash}|{audit_id}|{timestamp}|{event_type}|{user_id}|"
-            f"{role}|{status}|{action_or_query}|{cited_hashes_json}"
+            f"{role}|{status}|{action_or_query}|{cited_hashes_json}|{ip_address}|{detail_str}"
         )
         signature_hash = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
@@ -187,8 +202,8 @@ class AuditLedger:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, audit_id, timestamp, user_id, role, event_type,
-                       action_or_query, status, cited_doc_hashes,
-                       signature_hash, prev_signature_hash
+                       action_or_query, status, cited_doc_hashes, ip_address,
+                       signature_hash, prev_signature_hash, detail
                 FROM audit_ledger
                 ORDER BY id ASC;
             """)
@@ -218,10 +233,11 @@ class AuditLedger:
                     ),
                 }
 
-            # 2. Recompute signature hash
+            # 2. Recompute signature hash across ALL row fields
+            detail_str = rec["detail"] or ""
             hash_payload = (
                 f"{rec['prev_signature_hash']}|{rec['audit_id']}|{rec['timestamp']}|{rec['event_type']}|{rec['user_id']}|"
-                f"{rec['role']}|{rec['status']}|{rec['action_or_query']}|{rec['cited_doc_hashes']}"
+                f"{rec['role']}|{rec['status']}|{rec['action_or_query']}|{rec['cited_doc_hashes']}|{rec['ip_address']}|{detail_str}"
             )
             recomputed = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 

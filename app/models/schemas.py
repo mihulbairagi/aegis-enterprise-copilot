@@ -54,9 +54,9 @@ class Citation(BaseModel):
 
 
 class TokenRequest(BaseModel):
-    """Request payload for issuing a signed enterprise JWT."""
-    user_id: str = Field(..., min_length=1, description="Enterprise user identifier / email")
-    role: Role = Field(..., description="Assigned RBAC clearance tier")
+    """Request payload for authenticating and issuing a signed enterprise JWT."""
+    username: str = Field(..., min_length=1, description="Enterprise username or corporate email")
+    password: str = Field(..., min_length=1, description="Enterprise account password")
 
 
 class TokenResponse(BaseModel):

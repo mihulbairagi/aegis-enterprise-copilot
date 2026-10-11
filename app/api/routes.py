@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from app.config import AuthConfig, DUCKDB_PATH, QUARANTINE_DIR, Role
 from app.core.actions import GroundedReasoningEngine, IdempotentActionDispatcher
 from app.core.audit import AuditLedger
-from app.core.auth import create_access_token, get_current_user
+from app.core.auth import authenticate_user, create_access_token, get_current_user, require_executive
 from app.core.circuit_breaker import DataQualityCircuitBreaker
 from app.core.rbac_engine import RBACHybridEngine
 from app.models.schemas import (
@@ -53,15 +53,31 @@ action_dispatcher = IdempotentActionDispatcher(audit_ledger)
 
 @router.post("/auth/token", response_model=TokenResponse, summary="Issue Enterprise JWT Token")
 def issue_token(req: TokenRequest) -> TokenResponse:
-    """Issues a cryptographically signed JWT bearer token containing user identity and RBAC role."""
-    token = create_access_token(user_id=req.user_id, role=req.role)
+    """Authenticates enterprise credentials and issues a signed JWT with verified RBAC role."""
+    authenticated = authenticate_user(req.username, req.password)
+    if not authenticated:
+        audit_ledger.log_event(
+            user_id=req.username,
+            role="UNKNOWN",
+            event_type="AUTH_FAILURE",
+            action_or_query=f"LOGIN_ATTEMPT user={req.username}",
+            status="DENIED_CREDENTIALS",
+            detail="Authentication failed: Invalid enterprise credentials.",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid enterprise username or password.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = create_access_token(user_id=authenticated.user_id, role=authenticated.role)
     expires_in_sec = AuthConfig.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
     audit_ledger.log_event(
-        user_id=req.user_id,
-        role=req.role.value,
+        user_id=authenticated.user_id,
+        role=authenticated.role.value,
         event_type="AUTH_TOKEN_ISSUED",
-        action_or_query=f"JWT_GRANT role={req.role.value}",
+        action_or_query=f"JWT_GRANT role={authenticated.role.value}",
         status="SUCCESS",
         detail=f"Issued JWT with {AuthConfig.ACCESS_TOKEN_EXPIRE_MINUTES}m expiration.",
     )
@@ -70,8 +86,8 @@ def issue_token(req: TokenRequest) -> TokenResponse:
         access_token=token,
         token_type="bearer",
         expires_in=expires_in_sec,
-        user_id=req.user_id,
-        role=req.role,
+        user_id=authenticated.user_id,
+        role=authenticated.role,
     )
 
 
@@ -203,12 +219,14 @@ def get_circuit_breaker_status() -> CircuitBreakerStatus:
 
 
 @router.post("/circuit-breaker/reset", response_model=CircuitBreakerStatus, summary="Admin Reset Circuit Breaker")
-def reset_circuit_breaker() -> CircuitBreakerStatus:
-    """Admin override resetting circuit breaker back to CLOSED state."""
+def reset_circuit_breaker(
+    current_user: AuthenticatedUser = Depends(require_executive),
+) -> CircuitBreakerStatus:
+    """Admin override resetting circuit breaker back to CLOSED state (Requires EXECUTIVE clearance)."""
     status_obj = circuit_breaker.reset()
     audit_ledger.log_event(
-        user_id="ADMIN_CONSOLE",
-        role="EXECUTIVE",
+        user_id=current_user.user_id,
+        role=current_user.role.value,
         event_type="CIRCUIT_BREAKER_RESET",
         action_or_query="ADMIN_RESET",
         status="SUCCESS",
@@ -234,24 +252,31 @@ def dispatch_action(
 
 
 # ============================================================================
-# 6. IMMUTABLE AUDIT LEDGER & QUARANTINE INSPECTION
+# 6. IMMUTABLE AUDIT LEDGER & QUARANTINE INSPECTION (EXECUTIVE PROTECTED)
 # ============================================================================
 
 @router.get("/audit/logs", response_model=List[AuditLogRecord], summary="Get Immutable Audit Logs")
-def get_audit_logs(limit: int = Query(default=50, ge=1, le=200)) -> List[AuditLogRecord]:
-    """Retrieves recent records from the append-only SQLite ledger."""
+def get_audit_logs(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: AuthenticatedUser = Depends(require_executive),
+) -> List[AuditLogRecord]:
+    """Retrieves recent records from the append-only SQLite ledger (Requires EXECUTIVE clearance)."""
     return audit_ledger.get_recent_entries(limit=limit)
 
 
 @router.get("/audit/verify", summary="Verify Tamper-Evident Hash Chain Integrity")
-def verify_audit_ledger() -> Dict[str, Any]:
-    """Cryptographically audits the entire SQLite chain from Genesis to head."""
+def verify_audit_ledger(
+    current_user: AuthenticatedUser = Depends(require_executive),
+) -> Dict[str, Any]:
+    """Cryptographically audits the entire SQLite chain from Genesis to head (Requires EXECUTIVE clearance)."""
     return audit_ledger.verify_ledger_integrity()
 
 
 @router.get("/storage/quarantine", summary="List Quarantined Dead-Letter Queue Files")
-def list_quarantine_files() -> List[Dict[str, Any]]:
-    """Returns metadata for all files isolated by the circuit breaker."""
+def list_quarantine_files(
+    current_user: AuthenticatedUser = Depends(require_executive),
+) -> List[Dict[str, Any]]:
+    """Returns metadata for all files isolated by the circuit breaker (Requires EXECUTIVE clearance)."""
     files: List[Dict[str, Any]] = []
     if not QUARANTINE_DIR.exists():
         return files

@@ -1,11 +1,7 @@
-"""Enterprise JWT Authentication & Cryptographic RBAC Verification.
-
-Provides token issuance and strict Bearer token validation using PyJWT.
-Extracts verified roles and prevents client-side role spoofing.
-"""
-
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,6 +11,74 @@ from app.models.schemas import AuthenticatedUser
 
 # Standard HTTPBearer scheme
 security = HTTPBearer(auto_error=False)
+
+
+def hash_password(password: str, salt: str) -> str:
+    """Computes PBKDF2-HMAC-SHA256 password hash."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations=100_000,
+    ).hex()
+
+
+SALT_INTERN = "aegis_salt_intern_2026_x89"
+SALT_ANALYST = "aegis_salt_analyst_2026_q41"
+SALT_EXEC = "aegis_salt_exec_2026_w73"
+
+ENTERPRISE_USERS: Dict[str, Dict[str, Any]] = {
+    "intern_user": {
+        "user_id": "intern_alex",
+        "role": Role.INTERN,
+        "salt": SALT_INTERN,
+        "password_hash": hash_password("intern_pass_2026", SALT_INTERN),
+    },
+    "user.intern@enterprise.internal": {
+        "user_id": "intern_alex",
+        "role": Role.INTERN,
+        "salt": SALT_INTERN,
+        "password_hash": hash_password("intern_pass_2026", SALT_INTERN),
+    },
+    "analyst_user": {
+        "user_id": "analyst_priya",
+        "role": Role.ANALYST,
+        "salt": SALT_ANALYST,
+        "password_hash": hash_password("analyst_pass_2026", SALT_ANALYST),
+    },
+    "sarah.analyst@enterprise.internal": {
+        "user_id": "analyst_priya",
+        "role": Role.ANALYST,
+        "salt": SALT_ANALYST,
+        "password_hash": hash_password("analyst_pass_2026", SALT_ANALYST),
+    },
+    "exec_user": {
+        "user_id": "exec_marcus",
+        "role": Role.EXECUTIVE,
+        "salt": SALT_EXEC,
+        "password_hash": hash_password("exec_pass_2026", SALT_EXEC),
+    },
+    "marcus.exec@enterprise.internal": {
+        "user_id": "exec_marcus",
+        "role": Role.EXECUTIVE,
+        "salt": SALT_EXEC,
+        "password_hash": hash_password("exec_pass_2026", SALT_EXEC),
+    },
+}
+
+
+def authenticate_user(username: str, password: str) -> Optional[AuthenticatedUser]:
+    """Timing-safe enterprise credential authentication."""
+    user_record = ENTERPRISE_USERS.get(username.strip().lower())
+    if not user_record:
+        return None
+    computed = hash_password(password, user_record["salt"])
+    if not hmac.compare_digest(computed, user_record["password_hash"]):
+        return None
+    return AuthenticatedUser(
+        user_id=user_record["user_id"],
+        role=user_record["role"],
+    )
 
 
 def create_access_token(
@@ -92,3 +156,22 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return verify_access_token(credentials.credentials)
+
+
+def require_role(min_role: Role):
+    """Enforces role clearance level on administrative and privileged endpoints."""
+    def dependency(current_user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:
+        from app.config import ROLE_HIERARCHY_LEVEL
+        caller_level = ROLE_HIERARCHY_LEVEL.get(current_user.role, 0)
+        required_level = ROLE_HIERARCHY_LEVEL.get(min_role, 3)
+        if caller_level < required_level:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access Denied: Action requires '{min_role.value}' clearance. Current caller role: '{current_user.role.value}'.",
+            )
+        return current_user
+    return dependency
+
+
+require_executive = require_role(Role.EXECUTIVE)
+

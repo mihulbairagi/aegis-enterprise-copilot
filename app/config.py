@@ -7,12 +7,23 @@ data quality circuit breaker thresholds, and storage persistence paths.
 import os
 from enum import Enum
 from pathlib import Path
+import logging
+import secrets
 from typing import Dict, List, Set
 
+_logger = logging.getLogger("aegis.config")
 
 class AuthConfig:
     """Enterprise JWT authentication parameters."""
-    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "aegis_enterprise_jwt_secret_key_prod_2026_fde_tier1")
+    _env_secret = os.getenv("JWT_SECRET_KEY")
+    if _env_secret:
+        SECRET_KEY: str = _env_secret
+    else:
+        SECRET_KEY: str = secrets.token_hex(32)
+        _logger.warning(
+            "CRITICAL SECURITY NOTICE: 'JWT_SECRET_KEY' environment variable not set. "
+            "Generated an ephemeral 256-bit cryptographically secure secret for runtime."
+        )
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 

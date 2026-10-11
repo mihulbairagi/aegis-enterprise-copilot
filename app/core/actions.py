@@ -9,6 +9,7 @@ Guarantees:
    to guarantee exactly-once execution and prevent duplicate ERP side-effects.
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from fastapi import HTTPException, status
 
 from app.config import (
     AUDIT_DB_PATH,
@@ -36,13 +38,14 @@ from app.models.schemas import (
     Citation,
     CopilotQueryRequest,
     CopilotQueryResponse,
+    DocumentChunk,
 )
 
 logger = logging.getLogger("aegis.actions")
 
 
 class IdempotencyStore:
-    """SQLite-backed persistent store for Idempotency-Key enforcement."""
+    """SQLite-backed persistent store for Idempotency-Key enforcement with user-scoping and payload hashing."""
 
     def __init__(self, db_path: Path = AUDIT_DB_PATH):
         self.db_path = db_path
@@ -52,31 +55,40 @@ class IdempotencyStore:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS idempotency_keys (
-                    idempotency_key TEXT PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    requester_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
                     action_id TEXT NOT NULL,
                     action_type TEXT NOT NULL,
-                    requester_id TEXT NOT NULL,
                     requester_role TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     response_json TEXT NOT NULL,
                     status TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    UNIQUE(requester_id, idempotency_key)
                 );
             """)
             conn.commit()
 
-    def get_existing(self, key: str) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def compute_payload_hash(payload: Dict[str, Any]) -> str:
+        """Computes deterministic SHA-256 hash over canonically ordered payload JSON."""
+        canonical_json = json.dumps(payload, sort_keys=True)
+        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+    def get_existing(self, requester_id: str, key: str) -> Optional[Dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT idempotency_key, action_id, action_type, requester_id,
-                       requester_role, response_json, status, created_at
+                SELECT requester_id, idempotency_key, action_id, action_type,
+                       requester_role, payload_hash, response_json, status, created_at
                 FROM idempotency_keys
-                WHERE idempotency_key = ?;
+                WHERE requester_id = ? AND idempotency_key = ?;
                 """,
-                (key,),
+                (requester_id, key),
             )
             row = cursor.fetchone()
             if row:
@@ -86,6 +98,7 @@ class IdempotencyStore:
                     "action_type": row["action_type"],
                     "requester_id": row["requester_id"],
                     "requester_role": row["requester_role"],
+                    "payload_hash": row["payload_hash"],
                     "response_data": json.loads(row["response_json"]),
                     "status": row["status"],
                     "created_at": row["created_at"],
@@ -104,13 +117,14 @@ class IdempotencyStore:
         status: str,
     ) -> None:
         created_at = datetime.now(timezone.utc).isoformat()
+        payload_hash = self.compute_payload_hash(payload)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO idempotency_keys (
                     idempotency_key, action_id, action_type, requester_id,
-                    requester_role, payload_json, response_json, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    requester_role, payload_hash, payload_json, response_json, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     key,
@@ -118,6 +132,7 @@ class IdempotencyStore:
                     action_type,
                     requester_id,
                     requester_role,
+                    payload_hash,
                     json.dumps(payload),
                     json.dumps(response_data),
                     status,
@@ -137,12 +152,13 @@ class GroundedReasoningEngine:
     def _call_routerplus_llm(
         self,
         query: str,
-        citations: List[Citation],
+        chunks: List[DocumentChunk],
         user_role: Role,
     ) -> str:
         """Invokes RouterPlus (Claude-3.5-Sonnet) with strictly pre-filtered context.
 
         Invariant: LLM receives ONLY context chunks that passed RLS pre-filtering.
+        Passes FULL content of each chunk so numerical figures and confidential policies are not truncated.
         Prompt enforces strict provenance: 'Answer using ONLY provided context and cite [doc_id].
         If context is empty, respond with: Access Denied: Insufficient Role Clearance for this information.'
         """
@@ -155,13 +171,13 @@ class GroundedReasoningEngine:
             "'Access Denied: Insufficient Role Clearance for this information.'"
         )
 
-        if not citations:
+        if not chunks:
             context_str = "(No authorized context provided - pre-filtering pruned all chunks or zero matches)"
         else:
             context_blocks = []
-            for c in citations:
+            for c in chunks:
                 context_blocks.append(
-                    f"[{c.chunk_id}] {c.doc_name} (Classification: {c.classification.value}, SHA-256: {c.doc_hash[:16]}...):\n{c.snippet}"
+                    f"[{c.chunk_id}] {c.doc_name} (Classification: {c.classification.value}, SHA-256: {c.doc_hash[:16]}...):\n{c.content}"
                 )
             context_str = "\n\n".join(context_blocks)
 
@@ -197,96 +213,67 @@ class GroundedReasoningEngine:
             logger.warning(f"RouterPlus API call exception ({type(exc).__name__}: {exc}). Using local deterministic synthesis.")
 
         # Fallback if external API unreachable
-        if not citations:
+        if not chunks:
             return "Access Denied: Insufficient Role Clearance for this information."
 
-        fallback_parts = [f"Based on {len(citations)} verified enterprise document(s) accessible to role [{user_role.value}]:"]
-        for idx, cit in enumerate(citations, 1):
-            fallback_parts.append(f"[{idx}] {cit.doc_name} (Classification: {cit.classification.value}): \"{cit.snippet}\"")
+        fallback_parts = [f"Based on {len(chunks)} verified enterprise document(s) accessible to role [{user_role.value}]:"]
+        for idx, c in enumerate(chunks, 1):
+            fallback_parts.append(f"[{idx}] {c.doc_name} (Classification: {c.classification.value}): \"{c.content}\"")
         return "\n\n".join(fallback_parts)
 
     def process_query(self, req: CopilotQueryRequest) -> CopilotQueryResponse:
         start_time = time.perf_counter()
 
         # Step 1: Execute unstructured retrieval with Row-Level Security Pre-Filtering
-        citations, accessible_count, redacted_count = self.rbac_engine.query_unstructured(
+        citations, chunks, accessible_count, redacted_count = self.rbac_engine.query_unstructured_chunks(
             query=req.query, user_role=req.role, top_k=4
         )
 
         latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
         cited_hashes = [c.doc_hash for c in citations]
 
-        # Case 1: Query targeted classified information user has NO clearance for
-        if not citations and redacted_count > 0:
-            llm_response = self._call_routerplus_llm(req.query, citations=[], user_role=req.role)
-            denied_msg = (
-                f"ACCESS DENIED (RLS ENFORCEMENT): {llm_response} "
-                f"A total of {redacted_count} relevant document chunk(s) were redacted at the database "
-                f"query layer prior to LLM reasoning. Required clearance: EXECUTIVE / RESTRICTED."
-            )
-            audit_entry = self.audit_ledger.log_event(
-                user_id=req.user_id,
-                role=req.role.value,
-                event_type="QUERY",
-                action_or_query=req.query,
-                status="DENIED_RBAC",
-                cited_doc_hashes=[],
-                detail=f"Pruned {redacted_count} classified chunks at RLS boundary. LLM synthesized clearance denial.",
-            )
-            return CopilotQueryResponse(
-                query=req.query,
-                user_id=req.user_id,
-                role=req.role,
-                answer=denied_msg,
-                citations=[],
-                accessible_chunks_count=accessible_count,
-                redacted_or_restricted_chunks_count=redacted_count,
-                rls_status="DENIED_ZERO_CLEARANCE",
-                latency_ms=latency_ms,
-                audit_id=audit_entry.audit_id,
-            )
-
-        # Case 2: No chunks found at all
+        # Case 1: Zero authorized citations found (either unauthorized query OR zero corpus match)
+        # CRITICAL FIX: Eliminate existence / metadata probing oracle.
+        # Both unauthorized classified queries and non-matching queries return identical generic response
+        # with redacted_or_restricted_chunks_count = 0 in client DTO.
         if not citations:
-            llm_response = self._call_routerplus_llm(req.query, citations=[], user_role=req.role)
-            no_info_msg = (
-                f"{llm_response} "
-                f"No matching enterprise records found for query '{req.query}' within authorized "
-                f"knowledge tiers for role '{req.role.value}'."
-            )
-            audit_entry = self.audit_ledger.log_event(
-                user_id=req.user_id,
-                role=req.role.value,
-                event_type="QUERY",
-                action_or_query=req.query,
-                status="NO_MATCH",
-                cited_doc_hashes=[],
-                detail="Zero matching chunks in corpus.",
-            )
+            generic_response = "No accessible records found matching your query."
+            if redacted_count > 0:
+                audit_entry = self.audit_ledger.log_event(
+                    user_id=req.user_id,
+                    role=req.role.value,
+                    event_type="QUERY",
+                    action_or_query=req.query,
+                    status="DENIED_RBAC",
+                    cited_doc_hashes=[],
+                    detail=f"RLS pre-filter pruned {redacted_count} classified chunks from unauthorized caller. Returned generic oracle-safe response.",
+                )
+            else:
+                audit_entry = self.audit_ledger.log_event(
+                    user_id=req.user_id,
+                    role=req.role.value,
+                    event_type="QUERY",
+                    action_or_query=req.query,
+                    status="NO_MATCH",
+                    cited_doc_hashes=[],
+                    detail="Zero matching chunks found in authorized corpus.",
+                )
+
             return CopilotQueryResponse(
                 query=req.query,
                 user_id=req.user_id,
                 role=req.role,
-                answer=no_info_msg,
+                answer=generic_response,
                 citations=[],
                 accessible_chunks_count=accessible_count,
-                redacted_or_restricted_chunks_count=0,
-                rls_status="ENFORCED_CLEAN",
+                redacted_or_restricted_chunks_count=0,  # Zero metadata leakage to client
+                rls_status="NO_RECORDS_FOUND",
                 latency_ms=latency_ms,
                 audit_id=audit_entry.audit_id,
             )
 
-        # Case 3: Grounded factual LLM synthesis from RLS pre-filtered citations
-        llm_response = self._call_routerplus_llm(req.query, citations=citations, user_role=req.role)
-
-        answer_parts = [llm_response]
-        if redacted_count > 0:
-            answer_parts.append(
-                f"\n\n[NOTE: {redacted_count} additional chunk(s) were pruned by Row-Level Security "
-                f"due to role clearance limits.]"
-            )
-
-        answer_text = "".join(answer_parts)
+        # Case 2: Grounded factual LLM synthesis from RLS pre-filtered citations (passing full chunks)
+        llm_response = self._call_routerplus_llm(req.query, chunks=chunks, user_role=req.role)
 
         audit_entry = self.audit_ledger.log_event(
             user_id=req.user_id,
@@ -295,17 +282,17 @@ class GroundedReasoningEngine:
             action_or_query=req.query,
             status="SUCCESS",
             cited_doc_hashes=cited_hashes,
-            detail=f"Retrieved {len(citations)} chunks; {redacted_count} redacted. Synthesized via RouterPlus LLM.",
+            detail=f"Retrieved {len(citations)} chunks ({redacted_count} restricted chunks pruned at RLS boundary). Synthesized via RouterPlus LLM.",
         )
 
         return CopilotQueryResponse(
             query=req.query,
             user_id=req.user_id,
             role=req.role,
-            answer=answer_text,
+            answer=llm_response,
             citations=citations,
             accessible_chunks_count=accessible_count,
-            redacted_or_restricted_chunks_count=redacted_count,
+            redacted_or_restricted_chunks_count=0,  # Redacted count strictly preserved only in audit log
             rls_status="ENFORCED_CLEAN",
             latency_ms=latency_ms,
             audit_id=audit_entry.audit_id,
@@ -322,14 +309,56 @@ class IdempotentActionDispatcher:
     def dispatch(self, req: ActionRequest) -> ActionResponse:
         key = req.idempotency_key.strip()
         action_type = req.action_type.strip().upper()
+        requester_id = req.requester_id or "anonymous_user"
+        requester_role = req.requester_role or Role.INTERN
 
-        # Step 1: Check Idempotency Store for prior execution
-        cached = self.idempotency_store.get_existing(key)
+        # Compute incoming payload hash
+        current_payload_hash = self.idempotency_store.compute_payload_hash(req.payload)
+
+        # Step 1: Check Idempotency Store for prior execution scoped to requester_id
+        cached = self.idempotency_store.get_existing(requester_id=requester_id, key=key)
         if cached:
-            logger.info(f"[IDEMPOTENCY HIT] Replay request with key={key}. Returning cached response without duplicate side-effects.")
+            # 1A: Check Payload Mismatch (reject altered payloads with 422 Unprocessable Entity)
+            if cached["payload_hash"] != current_payload_hash:
+                logger.warning(
+                    f"[IDEMPOTENCY PAYLOAD MISMATCH] Key '{key}' for user '{requester_id}' "
+                    f"resubmitted with altered payload parameters. Raising 422."
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Idempotency Payload Mismatch: Key previously dispatched with different payload parameters.",
+                )
+
+            # 1B: Validate caller RBAC clearance before returning cached result
+            permitted_actions = ROLE_PERMITTED_ACTIONS.get(requester_role, set())
+            if action_type not in permitted_actions:
+                denied_msg = (
+                    f"RBAC ACTION VIOLATION: Role '{requester_role.value}' is not permitted to access "
+                    f"cached operation '{action_type}'. Required clearance tier: EXECUTIVE."
+                )
+                audit_entry = self.audit_ledger.log_event(
+                    user_id=requester_id,
+                    role=requester_role.value,
+                    event_type="ACTION",
+                    action_or_query=action_type,
+                    status="DENIED_RBAC",
+                    detail=denied_msg,
+                )
+                return ActionResponse(
+                    action_id=f"act_denied_{uuid.uuid4().hex[:8]}",
+                    idempotency_key=key,
+                    action_type=action_type,
+                    status="DENIED_RBAC",
+                    executed_at=datetime.now(timezone.utc).isoformat(),
+                    result_data={"error": denied_msg},
+                    audit_id=audit_entry.audit_id,
+                    message=denied_msg,
+                )
+
+            logger.info(f"[IDEMPOTENCY HIT] Replay request with key={key} for user={requester_id}. Returning cached response without duplicate side-effects.")
             audit_entry = self.audit_ledger.log_event(
-                user_id=req.requester_id,
-                role=req.requester_role.value,
+                user_id=requester_id,
+                role=requester_role.value,
                 event_type="ACTION",
                 action_or_query=f"{action_type} (REPLAY key={key[:8]}...)",
                 status="DUPLICATE_CACHED",

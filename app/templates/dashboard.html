@@ -343,13 +343,20 @@
     let activeUserId = 'user.intern@enterprise.internal';
     let currentJwtToken = '';
 
+    const USER_CREDENTIALS = {
+      'INTERN': { username: 'intern_user', password: 'intern_pass_2026' },
+      'ANALYST': { username: 'analyst_user', password: 'analyst_pass_2026' },
+      'EXECUTIVE': { username: 'exec_user', password: 'exec_pass_2026' }
+    };
+
     // Automatically acquire signed JWT token for the active role
     async function acquireToken(role, userId) {
       try {
+        const creds = USER_CREDENTIALS[role] || USER_CREDENTIALS['INTERN'];
         const res = await fetch('/api/auth/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: userId, role: role })
+          body: JSON.stringify({ username: creds.username, password: creds.password })
         });
         const data = await res.json();
         currentJwtToken = data.access_token;
@@ -616,11 +623,24 @@ VND-503,Grafana Labs,Telemetry Visualization,48000,ACTIVE`;
 
     // Reset Breaker
     async function resetBreaker() {
-      const res = await fetch('/api/circuit-breaker/reset', { method: 'POST' });
-      const data = await res.json();
-      alert('Circuit Breaker administratively reset to CLOSED state.');
-      refreshBreakerStatus();
-      loadAuditLogs();
+      try {
+        const res = await fetch('/api/circuit-breaker/reset', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + currentJwtToken
+          }
+        });
+        if (res.status === 403) {
+          alert('Administrative Action Denied: Resetting Circuit Breaker requires EXECUTIVE clearance.');
+          return;
+        }
+        const data = await res.json();
+        alert('Circuit Breaker administratively reset to CLOSED state.');
+        refreshBreakerStatus();
+        loadAuditLogs();
+      } catch (err) {
+        alert('Reset failed: ' + err.message);
+      }
     }
 
     // Dispatch Action (Bearer Token Authenticated)
@@ -670,10 +690,19 @@ VND-503,Grafana Labs,Telemetry Visualization,48000,ACTIVE`;
     // Load Audit Logs
     async function loadAuditLogs() {
       try {
-        const res = await fetch('/api/audit/logs?limit=15');
-        const logs = await res.json();
+        const res = await fetch('/api/audit/logs?limit=15', {
+          headers: {
+            'Authorization': 'Bearer ' + currentJwtToken
+          }
+        });
         const tbody = document.getElementById('auditTableBody');
 
+        if (res.status === 403) {
+          tbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-amber-400 font-sans">🔒 Audit ledger inspection restricted to EXECUTIVE clearance tier. (Switch to Executive role to inspect)</td></tr>';
+          return;
+        }
+
+        const logs = await res.json();
         if (!logs || logs.length === 0) {
           tbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-slate-500 font-sans">No audit records recorded yet.</td></tr>';
           return;
@@ -701,11 +730,21 @@ VND-503,Grafana Labs,Telemetry Visualization,48000,ACTIVE`;
     // Verify Hash Chain Integrity
     async function verifyLedgerIntegrity() {
       try {
-        const res = await fetch('/api/audit/verify');
-        const data = await res.json();
+        const res = await fetch('/api/audit/verify', {
+          headers: {
+            'Authorization': 'Bearer ' + currentJwtToken
+          }
+        });
         const banner = document.getElementById('integrityBanner');
         banner.classList.remove('hidden');
 
+        if (res.status === 403) {
+          banner.className = 'rounded-lg p-3 text-xs mono font-semibold flex items-center justify-between bg-amber-950/60 border border-amber-500/50 text-amber-300';
+          banner.innerHTML = `<span>🔒 Cryptographic ledger verification requires EXECUTIVE clearance. Switch to Executive role to verify.</span>`;
+          return;
+        }
+
+        const data = await res.json();
         if (data.is_valid) {
           banner.className = 'rounded-lg p-3 text-xs mono font-semibold flex items-center justify-between bg-emerald-950/60 border border-emerald-500/50 text-emerald-300';
           banner.innerHTML = `

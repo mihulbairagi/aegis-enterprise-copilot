@@ -333,10 +333,10 @@ class RBACHybridEngine:
         self.unstructured_store.add_chunks(chunks_to_index)
         logger.info(f"Initialized RBAC Hybrid Engine with {len(chunks_to_index)} security-classified document chunks.")
 
-    def query_unstructured(
+    def query_unstructured_chunks(
         self, query: str, user_role: Role, top_k: int = 4
-    ) -> Tuple[List[Citation], int, int]:
-        """Searches unstructured knowledge with strict RLS pre-filtering and formats citations."""
+    ) -> Tuple[List[Citation], List[DocumentChunk], int, int]:
+        """Searches unstructured knowledge with strict RLS pre-filtering and formats citations while retaining full chunks."""
         chunks, total_accessible, redacted_count = self.unstructured_store.search_with_rls_prefilter(
             query=query, user_role=user_role, top_k=top_k
         )
@@ -354,6 +354,15 @@ class RBACHybridEngine:
                 )
             )
 
+        return citations, chunks, total_accessible, redacted_count
+
+    def query_unstructured(
+        self, query: str, user_role: Role, top_k: int = 4
+    ) -> Tuple[List[Citation], int, int]:
+        """Searches unstructured knowledge with strict RLS pre-filtering and formats citations."""
+        citations, _, total_accessible, redacted_count = self.query_unstructured_chunks(
+            query=query, user_role=user_role, top_k=top_k
+        )
         return citations, total_accessible, redacted_count
 
     def execute_structured_query(
