@@ -10,7 +10,8 @@
 [![DuckDB](https://img.shields.io/badge/DuckDB-In--Process%20OLAP-FFF000.svg)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-Chained%20Ledger-003B57.svg)](https://sqlite.org)
 [![Memory Profile](https://img.shields.io/badge/RAM%20Footprint-%3C60MB%20(8GB%20Friendly)-brightgreen.svg)]()
-[![Tests Passing](https://img.shields.io/badge/tests-19%2F19%20passing-success.svg)]()
+[![Tests Passing](https://img.shields.io/badge/tests-25%2F25%20passing-success.svg)]()
+[![Security Audit](https://img.shields.io/badge/Security-Hardened%20Append--Only%20Ledger-blue.svg)]()
 
 ---
 
@@ -145,7 +146,7 @@ uv pip install -r requirements.txt
 
 ### 5.2. Running the Full Test Suite
 ```powershell
-# Execute 19 comprehensive integration tests
+# Execute 25 comprehensive integration and security hardening tests
 .\.venv\Scripts\python.exe -m pytest -v tests/test_copilot.py
 ```
 
@@ -187,7 +188,7 @@ Open your browser to:
 ### Backend SDE-1 / SDE-2 (Core Systems & Infrastructure)
 - *Built high-throughput, 8GB RAM-friendly operations backend in FastAPI and DuckDB, achieving sub-5ms query latency and zero Docker dependency overhead.*
 - *Engineered a deterministic BM25 lexical retrieval engine with semantic dominance pruning to block unauthorized prompt leakage for enterprise RBAC clearance tiers.*
-- *Authored 19/19 automated integration tests validating circuit breaker failure state machines, RLS query planner constraints, and Merkle-style ledger tamper detection.*
+- *Authored 25/25 automated integration tests validating circuit breaker failure state machines, RLS query planner constraints, user-scoped idempotency, and Merkle-style ledger tamper detection.*
 
 ---
 
