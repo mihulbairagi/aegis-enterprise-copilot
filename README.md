@@ -187,7 +187,7 @@ Open your browser to:
 ### Backend SDE-1 / SDE-2 (Core Systems & Infrastructure)
 - *Built high-throughput, 8GB RAM-friendly operations backend in FastAPI and DuckDB, achieving sub-5ms query latency and zero Docker dependency overhead.*
 - *Engineered a deterministic BM25 lexical retrieval engine with semantic dominance pruning to block unauthorized prompt leakage for enterprise RBAC clearance tiers.*
-- *Authored 14/14 automated integration tests validating circuit breaker failure state machines, RLS query planner constraints, and Merkle-style ledger tamper detection.*
+- *Authored 19/19 automated integration tests validating circuit breaker failure state machines, RLS query planner constraints, and Merkle-style ledger tamper detection.*
 
 ---
 
